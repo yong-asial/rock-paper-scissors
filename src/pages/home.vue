@@ -6,19 +6,24 @@
     </f7-navbar>
     <f7-block strong v-show="cameraLoaded">
       <f7-row class="justify-content-center">
-        <f7-col>
+        <f7-col v-show="!isAndroid() && !isIphone()">
           <f7-button fill :disabled="!loaded" raised @click="runPrediction">
             <f7-icon f7="camera" :size="36"></f7-icon>
           </f7-button>
         </f7-col>
-        <f7-col>
+        <f7-col v-show="isAndroid() || isIphone()">
           <f7-button fill :disabled="!loaded" raised @click="openCamera">
             <f7-icon f7="camera_circle" :size="36"></f7-icon>
           </f7-button>
         </f7-col>
-        <f7-col>
+        <f7-col v-show="isAndroid() || isIphone()">
           <f7-button fill :disabled="!loaded" raised @click="openFilePicker">
             <f7-icon f7="folder" :size="36"></f7-icon>
+          </f7-button>
+        </f7-col>
+        <f7-col v-show="isAndroid() || isIphone()">
+          <f7-button fill :disabled="!loaded" raised @click="canvasCamera">
+            <f7-icon f7="camera_viewfinder" :size="36"></f7-icon>
           </f7-button>
         </f7-col>
       </f7-row>
@@ -31,17 +36,17 @@
     <f7-block>
       <f7-row class="justify-content-center" v-show="cameraLoaded">
         <f-card class="predict-image">
-          <div class="camera">
+          <div class="camera" v-show="!isAndroid() && !isIphone()">
             <p>Usermedia</p>
             <video ref="videoRef" playsinline autoplay></video>
           </div>
-          <div class="camera">
+          <div class="camera" v-show="isAndroid() || isIphone()">
             <p>Image</p>
 						<img style="width:480px;height:480px" id="imageFile">
           </div>
-          <div class="camera">
+          <div class="camera" v-show="!isAndroid() && !isIphone()">
             <p>Canvas</p>
-            <canvas ref="canvasRef"></canvas>
+            <canvas id="canvas" ref="canvasRef"></canvas>
           </div>
         </f-card>
       </f7-row>
@@ -146,7 +151,6 @@ export default {
 
     onMounted(async () => {
       if (isAndroid()) {
-        alert('android');
         // overwrite fetch so that it can load model from file system
         window.fetch = fetchPolyfill;
       }
@@ -155,11 +159,10 @@ export default {
       metadata = await res.json();
       canvasRef.value.width = 480;
       canvasRef.value.height = 480;
-      if (isIphone()) {
-        alert('iphone');
-        cameraLoaded.value = true;
-      } else {
+      if ((!isAndroid() && !isIphone()) && navigator.mediaDevices && navigator.mediaDevices.getUserMedia) {
         navigator.mediaDevices.getUserMedia(constraints).then(handleSuccess).catch(handleError);
+      } else {
+        cameraLoaded.value = true;
       }
       loaded.value = true;
     });
@@ -171,7 +174,7 @@ export default {
 
     /* - - - - - - - - - - - - - - - -
      Methods for the camera plugin
--    - - - - - - - - - - - - - - - - */
+    - - - - - - - - - - - - - - - - - */
     // Set options for camera
     function setOptions(srcType) {
       const options = {
@@ -241,6 +244,76 @@ export default {
       result.value = metadata.labels[index];
     }
 
+    document.addEventListener('deviceready', function () {
+      console.log('device is ready');
+    }, false);
+
+    async function canvasCamera() {
+      const canvasEl = document.getElementById('canvas');
+      window.plugin.CanvasCamera.initialize(canvasEl);
+      const options = {
+          canvas: {
+            width: 480,
+            height: 480
+          },
+          capture: {
+            width: 480,
+            height: 480
+          },
+          use: 'file',
+          fps: 30,
+          hasThumbnail: false,
+          //thumbnailRatio: 1/6,
+          cameraFacing: 'back',
+          onAfterDraw: function(frame) {
+            console.log('afterDraw', frame)
+          }
+      };
+      let predictionInterval = 1000 * 5;
+      if (isAndroid()) {
+        predictionInterval = 1000 * 10;
+      }
+      setInterval(async () => {
+        // predict
+        let image = document.getElementById("imageFile");
+        if (!image || !image.src) return;
+        tensor = tf.browser
+          .fromPixels(image)
+          .resizeNearestNeighbor([224, 224])
+          .expandDims()
+          .toFloat();
+        const res = await model.predict(tensor).data();
+        const index = tf.argMax(res).dataSync();
+        result.value = metadata.labels[index];
+      }, predictionInterval);
+      window.plugin.CanvasCamera.start(options, async function(error) {
+          console.log('[CanvasCamera start]', 'error', error);
+      }, function(data) {
+        const protocol = 'file://';
+        let filepath = '';
+        if (isAndroid()) {
+          filepath = protocol + data.output.images.fullsize.file;
+        } else {
+          filepath = data.output.images.fullsize.file;
+        }
+        window.resolveLocalFileSystemURL(filepath, async function success(fileEntry) {
+          fileEntry.file(function (file) {
+            let reader = new FileReader();
+            reader.onloadend = async function() {
+                let blob = new Blob([new Uint8Array(reader.result)], { type: "image/png" });
+                let image = document.getElementById("imageFile");
+                image.src = window.URL.createObjectURL(blob);
+            };
+            reader.readAsArrayBuffer(file);
+          }, function errorReadFile(err) {
+            console.log('read', err);
+          });
+        }, function error(error) {
+          console.log(error);
+        })
+      });
+    }
+
     return {
       image,
       result,
@@ -251,7 +324,10 @@ export default {
       inPrediction,
       cameraLoaded,
       openCamera,
-      openFilePicker
+      openFilePicker,
+      canvasCamera,
+      isAndroid,
+      isIphone
     }
   },
 }
@@ -281,9 +357,8 @@ export default {
     overflow: hidden;
   }
 
-  /* canvas, video, img {
-    object-fit: cover;
+  canvas, video, img {
     height: 480px;
     width: 480px;
-  } */
+  }
 </style>
