@@ -1,140 +1,251 @@
 <template>
   <f7-page name="home">
     <!-- Top Navbar -->
-    <f7-navbar :sliding="false">
-      <f7-nav-title sliding>Fruit freshness</f7-nav-title>
+    <f7-navbar>
+      <f7-nav-title>Fruit Freshness</f7-nav-title>
     </f7-navbar>
-    <f7-block strong v-show="cameraLoaded">
-      <f7-row class="justify-content-center">
-        <f7-col v-show="!isAndroid() && !isIphone()">
-          <f7-button fill :disabled="!loaded" raised @click="runPrediction">
-            <f7-icon f7="camera" :size="36"></f7-icon>
-          </f7-button>
-        </f7-col>
-        <f7-col v-show="isAndroid() || isIphone()">
-          <f7-button fill :disabled="!loaded" raised @click="openCamera">
-            <f7-icon f7="camera_circle" :size="36"></f7-icon>
-          </f7-button>
-        </f7-col>
-        <f7-col v-show="isAndroid() || isIphone()">
-          <f7-button fill :disabled="!loaded" raised @click="openFilePicker">
-            <f7-icon f7="folder" :size="36"></f7-icon>
-          </f7-button>
-        </f7-col>
-        <f7-col v-show="isAndroid() || isIphone()">
-          <f7-button fill :disabled="!loaded" raised @click="canvasCamera">
-            <f7-icon f7="camera_viewfinder" :size="36"></f7-icon>
-          </f7-button>
-        </f7-col>
+    <f7-block>
+      <f7-row class="justify-content-center" v-show="loaded">
+        <f-card>
+          <div class="camera" v-show="!isMobile()">
+            <video ref="videoRef" playsinline autoplay></video>
+          </div>
+          <div class="camera" v-show="isMobile()">
+            <img ref="imageRef">
+          </div>
+          <div class="camera" v-show="showCanvas">
+            <canvas id="canvas" ref="canvasRef"></canvas>
+          </div>
+          <div class="result">{{ result }}</div>
+        </f-card>
       </f7-row>
-      <f7-row v-if="result">
-        <f7-col class="predict-result">
-          <p style="font-size: 1.5rem">{{ result }}</p>
+      <f7-row v-show="!loaded">
+        <f7-col>
+          <f7-preloader :size="42"></f7-preloader>
         </f7-col>
       </f7-row>
     </f7-block>
-    <f7-block>
-      <f7-row class="justify-content-center" v-show="cameraLoaded">
-        <f-card class="predict-image">
-          <div class="camera" v-show="!isAndroid() && !isIphone()">
-            <p>Usermedia</p>
-            <video ref="videoRef" playsinline autoplay></video>
-          </div>
-          <div class="camera" v-show="isAndroid() || isIphone()">
-            <p>Image</p>
-						<img style="width:480px;height:480px" id="imageFile">
-          </div>
-          <div class="camera" v-show="!isAndroid() && !isIphone()">
-            <p>Canvas</p>
-            <canvas id="canvas" ref="canvasRef"></canvas>
-          </div>
-        </f-card>
-      </f7-row>
-      <f7-row v-show="!cameraLoaded">
-        <f7-col>
-          <f7-preloader :size="42"></f7-preloader>
+    <f7-block strong v-show="loaded">
+      <f7-row class="justify-content-center">
+        <f7-col v-show="!isMobile()">
+          <f7-button fill raised @click="predictWithUsermedia">
+            <f7-icon :f7="cameraIcon" :size="36"></f7-icon>
+          </f7-button>
+        </f7-col>
+        <f7-col v-show="isMobile()">
+          <f7-button fill raised @click="predictWithCanvasCamera">
+            <f7-icon :f7="cameraIcon" :size="36"></f7-icon>
+          </f7-button>
         </f7-col>
       </f7-row>
     </f7-block>
   </f7-page>
 </template>
 <script>
-import { f7, f7ready } from 'framework7-vue';
 import * as tf from '@tensorflow/tfjs';
 import { onMounted, ref, onBeforeUnmount } from 'vue';
 import { fetch as fetchPolyfill } from "whatwg-fetch";
 
 export default {
   setup() {
+    // variable and DOM
     const image = ref("");
     const result = ref(null);
-    const loaded = ref(false);
     const videoRef = ref(null);
+    const imageRef = ref(null);
     const canvasRef = ref(null);
-    const inPrediction = ref(false);
-    const cameraLoaded = ref(false);
+    const loaded = ref(false);
+    const showCanvas = ref(false);
+    const cameraIcon = ref('camera');
+    const w = 480; // width for canvas, video, image
+    const h = 480; // height for canvas, video, image
     let model;
     let tensor;
     let metadata;
+    let predictionInterval = 1000 * 5; // set it lower if the pc and model could run faster
+    let predictionTimer = null;
 
-    const items = [
-      'Fresh apple',
-      'Fresh banana',
-      'Fresh orange',
-      'Rotten apple',
-      'Rotten banana',
-      'Rotten orange'
-    ];
+    onBeforeUnmount(() => {
+      if (model) model.dispose();
+      if (tensor) tensor.dispose();
+    })
 
-    const runPrediction = async () => {
-      if (!model) {
+    onMounted(async () => {
+      if (isAndroid()) {
+        // overwrite fetch so that it can load model from file system
+        window.fetch = fetchPolyfill;
+        // set prediction interval for android little bit longer
+        predictionInterval = 1000 * 10;
+      }
+      // load model
+      model = await tf.loadLayersModel('static/model/model.json');
+      const res = await fetch('static/model/metadata.json');
+      metadata = await res.json();
+      canvasRef.value.width = w;
+      canvasRef.value.height = h;
+      // start usermedia stream on web and if browser support it
+      if (!isMobile() && navigator.mediaDevices && navigator.mediaDevices.getUserMedia) {
+        startUserMedia();
+      } else {
+        loaded.value = true;
+      }
+    });
+
+    /**
+     * Web functions
+     */
+
+    const predictWithUsermedia = async () => {
+      if (!model || !videoRef.value || !canvasRef.value) {
         return;
       }
+      // toggle camera icon and prediction
+      if (cameraIcon.value === 'camera') {
+        cameraIcon.value = 'xmark_circle';
+        // start prediction
+        predictionTimer = setInterval(() => {
+          // draw canvas from usermedia stream
+          canvasRef.value.width = videoRef.value.videoWidth;
+          canvasRef.value.height = videoRef.value.videoHeight;
+          canvasRef.value.getContext('2d').drawImage(videoRef.value, 0, 0, canvasRef.value.width, canvasRef.value.height);
+          // run classification with the canvas
+          classify(canvasRef.value.getContext('2d').getImageData(0, 0, canvasRef.value.width, canvasRef.value.height));
+        }, predictionInterval);
+      } else {
+        cameraIcon.value = 'camera';
+        stopPredictionTimer();
+      }
+    }
 
-      canvasRef.value.width = videoRef.value.videoWidth;
-      canvasRef.value.height = videoRef.value.videoHeight;
-      canvasRef.value.getContext('2d').drawImage(videoRef.value, 0, 0, canvasRef.value.width, canvasRef.value.height);
+    const startUserMedia = () => {
+      const constraint = {
+        audio: false,
+        video: {
+          facingMode: 'environment',
+          width: { min: w, ideal: w, max: w, exact: w },
+          height: { min: h, ideal: h, max: h, exact: h },
+        }
+      };
 
-      loaded.value = false;
+      const handleSuccess = (stream) => {
+        loaded.value = true;
+        videoRef.value.srcObject = stream;
+      }
+
+      const handleError = (error) => {
+        alert(error.message);
+        loaded.value = true;
+        console.log('navigator.MediaDevices.getUserMedia error: ', error.message, error.name);
+      }
+
+      navigator.mediaDevices.getUserMedia(constraint).then(handleSuccess).catch(handleError);
+    }
+
+    /** 
+     * Mobile functions
+     */
+
+    const predictWithCanvasCamera = () => {
+      if (!model || !window.plugin.CanvasCamera || !imageRef) {
+        return;
+      }
+      // toggle camera icon and prediction
+      if (cameraIcon.value === 'camera') {
+        cameraIcon.value = 'xmark_circle';
+        startCanvasCamera();
+        // start predicting
+        predictionTimer = setInterval(() => {
+          if (!imageRef || !imageRef.value || !imageRef.value.src) return;
+          classify(imageRef.value);
+        }, predictionInterval);
+      } else {
+        cameraIcon.value = 'camera';
+        stopCanvasCamera();
+        stopPredictionTimer();
+      }
+    }
+
+    const startCanvasCamera = () => {
+      const options = {
+          canvas: {
+            width: w,
+            height: h
+          },
+          capture: {
+            width: w,
+            height: h
+          },
+          use: 'file',
+          fps: 30,
+          hasThumbnail: false,
+          cameraFacing: 'back'
+      };
+      window.plugin.CanvasCamera.start(options, async (error) => {
+        console.log('[CanvasCamera start]', 'error', error);
+      }, (data) => {
+        // set file protocol
+        const protocol = 'file://';
+        let filepath = '';
+        if (isAndroid()) {
+          filepath = protocol + data.output.images.fullsize.file;
+        } else {
+          filepath = data.output.images.fullsize.file;
+        }
+        // read image from local file and assign to image element
+        window.resolveLocalFileSystemURL(filepath, async (fileEntry) => {
+          fileEntry.file((file) => {
+            const reader = new FileReader();
+            reader.onloadend = async () => {
+                const blob = new Blob([new Uint8Array(reader.result)], { type: "image/png" });
+                imageRef.value.src = window.URL.createObjectURL(blob);
+            };
+            reader.readAsArrayBuffer(file);
+          }, (err) => {
+            console.log('read', err);
+          });
+        }, (error) => {
+          console.log(error);
+        })
+      });
+    }
+
+    const stopCanvasCamera = () => {
+        // stop canvas camera
+        window.plugin.CanvasCamera.stop((error) => {
+            console.log('[CanvasCamera stop]', 'error', error);
+        }, (data) => {
+            console.log('[CanvasCamera stop]', 'data', data);
+        });
+    }
+
+    /**
+     * Helper functions
+     */
+
+    const classify = (image) => {
+      // the first prediction takes a few seconds
       result.value = false;
-      inPrediction.value = true;
-
       tensor = tf.browser
-        .fromPixels(canvasRef.value.getContext('2d').getImageData(0, 0, canvasRef.value.width, canvasRef.value.height))
+        .fromPixels(image)
         .resizeNearestNeighbor([224, 224])
         .expandDims()
         .toFloat();
 
-      const res = await model.predict(tensor).data();
-      const index = tf.argMax(res).dataSync();
+      model.predict(tensor).data()
+        .then(res => {
+          const index = tf.argMax(res).dataSync();
+          result.value = metadata.labels[index];
+        });
 
-      result.value = metadata.labels[index];
-
-      setTimeout(() => {
-        inPrediction.value = false;
-      }, 1000);
-
-      loaded.value = true;
     }
 
-    const constraints = {
-      audio: false,
-      video: {
-        facingMode: 'environment',
-        width: { min: 480, ideal: 480, max: 480, exact: 480 },
-        height: { min: 480, ideal: 480, max: 480, exact: 480 },
-      }
-    };
-
-    const handleSuccess = (stream) => {
-      cameraLoaded.value = true;
-      videoRef.value.srcObject = stream;
+    const stopPredictionTimer = () => {
+        clearInterval(predictionTimer);
+        predictionTimer = null;
     }
 
-    const handleError = (error) => {
-      alert(error.message);
-      cameraLoaded.value = true;
-      console.log('navigator.MediaDevices.getUserMedia error: ', error.message, error.name);
+    const isMobile = () => {
+      return isAndroid() || isIos();
     }
 
     const isAndroid = () => {
@@ -143,191 +254,24 @@ export default {
       return false;
     }
 
-    const isIphone = () => {
+    const isIos = () => {
       const userAgent = navigator.userAgent || navigator.vendor || window.opera;
       if (/iPad|iPhone|iPod/i.test(userAgent)) return true;
       return false;
     }
 
-    onMounted(async () => {
-      if (isAndroid()) {
-        // overwrite fetch so that it can load model from file system
-        window.fetch = fetchPolyfill;
-      }
-      model = await tf.loadLayersModel('static/model/model.json');
-      const res = await fetch('static/model/metadata.json');
-      metadata = await res.json();
-      canvasRef.value.width = 480;
-      canvasRef.value.height = 480;
-      if ((!isAndroid() && !isIphone()) && navigator.mediaDevices && navigator.mediaDevices.getUserMedia) {
-        navigator.mediaDevices.getUserMedia(constraints).then(handleSuccess).catch(handleError);
-      } else {
-        cameraLoaded.value = true;
-      }
-      loaded.value = true;
-    });
-
-    onBeforeUnmount(() => {
-      if (model) model.dispose();
-      if (tensor) tensor.dispose();
-    })
-
-    /* - - - - - - - - - - - - - - - -
-     Methods for the camera plugin
-    - - - - - - - - - - - - - - - - - */
-    // Set options for camera
-    function setOptions(srcType) {
-      const options = {
-        quality: 50,
-        destinationType: Camera.DestinationType.DATA_URL,
-        sourceType: srcType,
-        encodingType: Camera.EncodingType.JPEG,
-        mediaType: Camera.MediaType.PICTURE,
-        allowEdit: false,
-        correctOrientation: true,
-      };
-      return options;
-    }
-
-    // Take picture with camera
-    function openCamera() {
-      try {
-        const srcType = Camera.PictureSourceType.CAMERA;
-        const options = setOptions(srcType);
-        navigator.camera.getPicture(
-          function cameraSuccess(imageUrl) {
-            displayImage(imageUrl);
-          },
-          function cameraError(error) {
-            console.debug("Unable to take picture: " + error, "app");
-          },
-          options
-        );
-      }
-      catch {
-        console.error("Something went wrong.");
-      }
-    }
-
-    // Open gallery and choose a picture
-    function openFilePicker() {
-      try {
-        const srcType = Camera.PictureSourceType.SAVEDPHOTOALBUM;
-        const options = setOptions(srcType);
-        navigator.camera.getPicture(
-          function cameraSuccess(imageUrl) {
-            // Cordova bug getPicture doesn't work properly
-            displayImage(imageUrl);
-          },
-          function cameraError(error) {
-            console.debug("Unable to obtain picture: " + error, "app");
-          },
-          options
-        );
-      } catch {
-        console.error("Something went wrong.");
-      }
-    }
-
-    // Add picture to DOM
-    async function displayImage(img) {
-      let image = document.getElementById("imageFile");
-      image.src = "data:image/jpeg;base64," + img;
-      // predict
-      tensor = tf.browser
-        .fromPixels(image)
-        .resizeNearestNeighbor([224, 224])
-        .expandDims()
-        .toFloat();
-      const res = await model.predict(tensor).data();
-      const index = tf.argMax(res).dataSync();
-      result.value = metadata.labels[index];
-    }
-
-    document.addEventListener('deviceready', function () {
-      console.log('device is ready');
-    }, false);
-
-    async function canvasCamera() {
-      const canvasEl = document.getElementById('canvas');
-      window.plugin.CanvasCamera.initialize(canvasEl);
-      const options = {
-          canvas: {
-            width: 480,
-            height: 480
-          },
-          capture: {
-            width: 480,
-            height: 480
-          },
-          use: 'file',
-          fps: 30,
-          hasThumbnail: false,
-          //thumbnailRatio: 1/6,
-          cameraFacing: 'back',
-          onAfterDraw: function(frame) {
-            console.log('afterDraw', frame)
-          }
-      };
-      let predictionInterval = 1000 * 5;
-      if (isAndroid()) {
-        predictionInterval = 1000 * 10;
-      }
-      setInterval(async () => {
-        // predict
-        let image = document.getElementById("imageFile");
-        if (!image || !image.src) return;
-        tensor = tf.browser
-          .fromPixels(image)
-          .resizeNearestNeighbor([224, 224])
-          .expandDims()
-          .toFloat();
-        const res = await model.predict(tensor).data();
-        const index = tf.argMax(res).dataSync();
-        result.value = metadata.labels[index];
-      }, predictionInterval);
-      window.plugin.CanvasCamera.start(options, async function(error) {
-          console.log('[CanvasCamera start]', 'error', error);
-      }, function(data) {
-        const protocol = 'file://';
-        let filepath = '';
-        if (isAndroid()) {
-          filepath = protocol + data.output.images.fullsize.file;
-        } else {
-          filepath = data.output.images.fullsize.file;
-        }
-        window.resolveLocalFileSystemURL(filepath, async function success(fileEntry) {
-          fileEntry.file(function (file) {
-            let reader = new FileReader();
-            reader.onloadend = async function() {
-                let blob = new Blob([new Uint8Array(reader.result)], { type: "image/png" });
-                let image = document.getElementById("imageFile");
-                image.src = window.URL.createObjectURL(blob);
-            };
-            reader.readAsArrayBuffer(file);
-          }, function errorReadFile(err) {
-            console.log('read', err);
-          });
-        }, function error(error) {
-          console.log(error);
-        })
-      });
-    }
-
     return {
       image,
       result,
-      loaded,
       videoRef,
+      imageRef,
       canvasRef,
-      runPrediction,
-      inPrediction,
-      cameraLoaded,
-      openCamera,
-      openFilePicker,
-      canvasCamera,
-      isAndroid,
-      isIphone
+      predictWithUsermedia,
+      loaded,
+      predictWithCanvasCamera,
+      showCanvas,
+      cameraIcon,
+      isMobile
     }
   },
 }
@@ -342,13 +286,12 @@ export default {
     font-size: 12px;
   }
 
-  .predict-result {
-    border: 1px solid #ddd;
-    text-transform: uppercase;
-  }
-
-  .predict-image {
-    overflow: hidden;
+  .result {
+    font-weight: bold;
+    font-size: 15px;
+    text-align: center;
+    padding: 5px;
+    margin-top: 10px;
   }
 
   div.camera {
