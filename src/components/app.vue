@@ -23,7 +23,7 @@ export default {
   setup() {
     // Framework7 Parameters
     const f7params = {
-      name: "fruit-freshness-classification", // App name
+      name: "rock-paper-scissors", // App name
       theme: "auto", // Automatic theme detection
       routes: routes, // App routes
       navbar: {

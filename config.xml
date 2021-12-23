@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<widget xmlns="http://www.w3.org/ns/widgets" id="test.fruit.classify" version="1.0.0">
-  <name>fruit-freshness-classification</name>
+<widget xmlns="http://www.w3.org/ns/widgets" id="test.monaca.rockpaperscissor" version="1.0.0">
+  <name>rock-paper-scissors</name>
   <description/>
   <author/>
   <content src="index.html"/>

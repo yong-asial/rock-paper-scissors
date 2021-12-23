@@ -1,7 +1,7 @@
 {
-    "name": "fruit-freshness-classification",
+    "name": "rock-paper-scissors",
     "version": "1.0.0",
-    "description": "fruit-freshness-classification",
+    "description": "rock-paper-scissors",
     "repository": "",
     "license": "UNLICENSED",
     "scripts": {
@@ -22,9 +22,7 @@
         "Samsung >= 5"
     ],
     "dependencies": {
-        "@tensorflow/tfjs": "^3.11.0",
-        "@tensorflow/tfjs-backend-cpu": "^3.11.0",
-        "@tensorflow/tfjs-backend-webgl": "^3.11.0",
+        "@teachablemachine/image": "^0.8.5",
         "com.virtuoworks.cordova-plugin-canvascamera": "^1.2.0",
         "cordova-plugin-file": "^6.0.2",
         "cordova-plugin-splashscreen": "6.0.0",
