@@ -18,3 +18,4 @@ We will cover how to train the machine learning (ML) model with Teachable Machin
 ### What is Teachable Machine?
 Teachable Machine is a web-based tool that allows us to easily train ML models without much prior knowledge with machine learning. The tool simplifies the process from adding training data, training the model, and exporting the model. You determine what "Classes" you want to train, then add your input with your webcam and hit "Train." The model then quickly learns the difference between these Classes you made. It is pretty easy!
 
+[Read more](https://medium.com/the-web-tub/create-your-first-machine-learning-mobile-application-853176e4eaa1)
